@@ -1,6 +1,7 @@
 import re
 import concurrent
 from pathlib import Path
+from datetime import datetime
 
 import pandas as pd
 from pandarallel import pandarallel
@@ -14,6 +15,52 @@ from matplotlib import pyplot as plt
 from nltk import WordNetLemmatizer
 
 pandarallel.initialize()
+
+transactions_field_mapping = {
+    'Orders Order ID': 'orders_id',
+    'Assigned Stylists Stylist ID': 'stylist_id',
+    'User User ID': 'user_id',
+    'Children Child ID': 'child_id',
+    'Requests Request Date': 'request_date',
+    'Orders Order Created Date': 'created_date',
+    'Orders Ship Date': 'ship_date',
+    'Orders Settle Date': 'settle_date',
+    'Order Items Total Shipped Price': 'shipped_price',
+    'Order Items Total Selling Price': 'kept_price',
+    'Order Items Return Reason': 'return_reason',
+    'Order Items Return Comments': 'return_comments'
+}
+
+transactions = None
+path = Path('/Users/saransh/Desktop/practicum/data/Full data')
+if not path.is_dir():
+    raise ValueError
+
+for file in path.iterdir():
+    if 'Transactions' in file.as_posix():
+        dd = pd.read_csv(str(file))
+        if transactions is None:
+            transactions = dd
+        else:
+            transactions = pd.concat([dd, transactions], ignore_index=True)
+
+transactions.rename(transactions_field_mapping, inplace=True, axis=1)
+transactions = transactions[transactions_field_mapping.values()]
+
+
+def convert_to_python_datetime(datetime_str):
+    return datetime.strptime(datetime_str, '%m/%d/%Y')
+
+transactions['request_date'] = transactions['request_date'].astype(np.object)
+transactions['created_date'] = transactions['created_date'].astype(np.object)
+transactions['ship_date'] = transactions['ship_date'].astype(np.object)
+transactions['settle_date'] = transactions['settle_date'].astype(np.object)
+
+transactions['request_date'] = transactions['request_date'].parallel_apply(convert_to_python_datetime)
+transactions['created_date'] = transactions['created_date'].parallel_apply(convert_to_python_datetime)
+transactions['ship_date'] = transactions['ship_date'].parallel_apply(convert_to_python_datetime)
+transactions['settle_date'] = transactions['settle_date'].parallel_apply(convert_to_python_datetime)
+
 field_name_mapping = {
     'Users User ID': 'user_id',
     ' CHATting Stylists Stylist ID': 'stylist_id',
@@ -372,6 +419,10 @@ urls = {key: urls[key] for key in sorted(urls, key=urls.get, reverse=True)}
 # start cleaning up text
 # associate the numbers and the urls to the transaction data
 # lemmatize, remove punctuations, frequent words
+# Number of child to difference in order purchase
+# Number of items kept to difference in order purchase
+# Difference between order request data and order created date
+# Explore the difference between ship and settle date
 
 
 # Observations:- https://macmia.co/2YURYeB  (What are your summertime needs? promotion)
