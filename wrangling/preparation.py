@@ -2,11 +2,13 @@ from functools import partial
 
 import numpy as np
 import pandas as pd
+from scipy.interpolate import make_interp_spline
 from matplotlib import pyplot as plt
 from matplotlib.axes import Axes
 from pandarallel import pandarallel
+from pandas import DataFrame
 
-from wrangling.transactions import convert_to_python_datetime, convert_datetime_cols_to_python_datetime, \
+from wrangling.utils import convert_to_python_datetime, convert_datetime_cols_to_python_datetime, \
     filter_based_on_ranges
 
 pandarallel.initialize()
@@ -17,7 +19,11 @@ user_and_order_level_data = pd.read_csv('/Users/saransh/Desktop/practicum/data/u
 datetime_conversion_func = partial(convert_to_python_datetime, format_str='%Y-%m-%d')
 convert_datetime_cols_to_python_datetime(user_and_order_level_data, conversion_func=datetime_conversion_func)
 
-user_and_order_level_data = filter_based_on_ranges(user_and_order_level_data, lower_bound=5, upper_bound=17)
+user_and_order_level_data = filter_based_on_ranges(
+    user_and_order_level_data, 'items_count', lower_bound=5, upper_bound=15
+)
+
+user_and_order_level_data = filter_based_on_ranges(user_and_order_level_data, 'order_rank', upper_bound=17)
 
 grouped_transactions_by_user = user_and_order_level_data.groupby('user_id')
 
@@ -57,4 +63,23 @@ axs: Axes = filter_based_on_ranges(
 axs.set_xlabel('Order lag')
 axs.set_ylabel('Lag between box request and ship date')
 axs.set_title('Impact on days to purchase due to lag b/w request and ship date')
+plt.show()
+
+axs: Axes = filter_based_on_ranges(train_data, 'order_lag', upper_bound=400).boxplot(
+    'order_lag', by='kept_count', vert=False
+)
+axs.set_xlabel('Order Lag')
+axs.set_ylabel('Kept count')
+axs.set_title('')
+plt.show()
+
+train_data['keep_rate'] = train_data.kept_count/train_data.items_count
+temp: DataFrame = filter_based_on_ranges(train_data, 'order_lag', upper_bound=400).groupby('keep_rate').order_lag.median().reset_index()
+bins = np.arange(0, 1.2, 0.1).tolist()
+keep_rate_bins = pd.cut(temp.keep_rate, bins, right=False, include_lowest=True)
+temp['keep_rate_bins'] = keep_rate_bins
+axs = temp.boxplot('order_lag', by='keep_rate_bins')
+axs.set_xlabel("Keep Rates")
+axs.set_ylabel("Order Lag")
+axs.set_title('Order lag distribution by keep rates')
 plt.show()

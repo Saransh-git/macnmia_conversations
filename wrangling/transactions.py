@@ -11,8 +11,9 @@ from pandas import DataFrame
 from pandas.core.groupby import DataFrameGroupBy
 from scipy.interpolate import make_interp_spline
 
-pandarallel.initialize()
+from wrangling.utils import convert_datetime_cols_to_python_datetime, convert_timedelata_to_days, filter_based_on_ranges
 
+pandarallel.initialize()
 transactions_field_mapping = {
     'Orders Order ID': 'orders_id',
     'Assigned Stylists Stylist ID': 'stylist_id',
@@ -46,37 +47,6 @@ def load_transactions_data(data_path: str = '/Users/saransh/Desktop/practicum/da
     transactions.rename(transactions_field_mapping, inplace=True, axis=1)
     transactions = transactions[transactions_field_mapping.values()]
     return transactions
-
-
-def convert_to_python_datetime(datetime_str, format_str='%m/%d/%Y'):
-    try:
-        ret_val = datetime.strptime(datetime_str, format_str)
-    except TypeError:
-        ret_val = np.nan
-    finally:
-        return ret_val
-
-
-def convert_datetime_cols_to_python_datetime(
-        df, cols=['request_date', 'created_date', 'ship_date', 'settle_date'],
-        conversion_func=convert_to_python_datetime
-):
-    for col in cols:
-        df[col] = df[col].astype(np.object)  # making sure the data is string type
-        df[col] = df[col].parallel_apply(conversion_func)
-    return df
-
-
-def convert_timedelata_to_days(delta: timedelta):
-    return delta.days
-
-
-def filter_based_on_ranges(
-        df: DataFrame, col_name: str = None, lower_bound: int = 0, upper_bound: int = sys.maxsize
-) -> DataFrame:
-    if col_name is None:
-        raise ValueError('No column name provided')
-    return df.loc[(df[col_name] >= lower_bound) & (df[col_name] <= upper_bound)]
 
 
 transactions = convert_datetime_cols_to_python_datetime(
@@ -189,3 +159,11 @@ axs = user_and_order_level_data.boxplot(
 axs.set_xlabel('')
 axs.set_ylabel('Order rank')
 plt.show()
+
+bins = range(0, user_and_order_level_data.items_count.max() + 1, 1)
+axs: Axes = user_and_order_level_data.kept_count.plot(kind='hist', bins=bins)
+axs.set_xticks(list(bins))
+axs.set_xlabel("Item keep count")
+axs.set_ylabel("Frequency")
+plt.show()
+
