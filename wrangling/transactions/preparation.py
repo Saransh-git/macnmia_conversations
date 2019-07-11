@@ -35,13 +35,13 @@ for user, grp in grouped_transactions_by_user:
     _grp = grp.sort_values('request_date')
     _grp = _grp.loc[_grp.box_price != 0]  # remove all the canceled orders
     _grp['order_rank'] = _grp['request_date'].rank(method='first', ascending=1)  # rank the orders again
-    foreword_order_lag = _grp.order_lag.iloc[1:, ]
-    if foreword_order_lag.empty:
-        foreword_order_lag = [np.nan]
-    _grp = _grp.iloc[:-1,]
+    foreword_order_lag = _grp.order_lag.iloc[1:, ].tolist()
+    foreword_order_lag = foreword_order_lag + [np.nan]  # shifting the lag upwards by one observation
     _grp['order_lag'] = foreword_order_lag
     train_data = train_data.append(_grp, ignore_index=True)
 
+train_data = train_data[~train_data.user_id.isna()]  # orders not corresponding to any user
+train_data = train_data[~train_data.ship_date.isna()]  # orders not shipped
 train_data.to_csv('/Users/saransh/Desktop/practicum/data/user_order_train.csv',index=False)
 
 bins = range(0, 801, 50)

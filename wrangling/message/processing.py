@@ -1,7 +1,5 @@
 import re
-import concurrent
 from pathlib import Path
-from datetime import datetime
 
 import pandas as pd
 from pandarallel import pandarallel
@@ -9,58 +7,11 @@ import numpy as np
 import nltk
 from matplotlib.axes import Axes
 from nltk import word_tokenize, Text, BigramCollocationFinder, TrigramCollocationFinder, FreqDist
-from nltk.corpus.reader.wordnet import POS_LIST
 from pandas import DataFrame
 from matplotlib import pyplot as plt
-from nltk import WordNetLemmatizer
+
 
 pandarallel.initialize()
-
-transactions_field_mapping = {
-    'Orders Order ID': 'orders_id',
-    'Assigned Stylists Stylist ID': 'stylist_id',
-    'User User ID': 'user_id',
-    'Children Child ID': 'child_id',
-    'Requests Request Date': 'request_date',
-    'Orders Order Created Date': 'created_date',
-    'Orders Ship Date': 'ship_date',
-    'Orders Settle Date': 'settle_date',
-    'Order Items Total Shipped Price': 'shipped_price',
-    'Order Items Total Selling Price': 'kept_price',
-    'Order Items Return Reason': 'return_reason',
-    'Order Items Return Comments': 'return_comments'
-}
-
-transactions = None
-path = Path('/Users/saransh/Desktop/practicum/data/Full data')
-if not path.is_dir():
-    raise ValueError
-
-for file in path.iterdir():
-    if 'Transactions' in file.as_posix():
-        dd = pd.read_csv(str(file))
-        if transactions is None:
-            transactions = dd
-        else:
-            transactions = pd.concat([dd, transactions], ignore_index=True)
-
-transactions.rename(transactions_field_mapping, inplace=True, axis=1)
-transactions = transactions[transactions_field_mapping.values()]
-
-
-def convert_to_python_datetime(datetime_str):
-    return datetime.strptime(datetime_str, '%m/%d/%Y')
-
-transactions['request_date'] = transactions['request_date'].astype(np.object)
-transactions['created_date'] = transactions['created_date'].astype(np.object)
-transactions['ship_date'] = transactions['ship_date'].astype(np.object)
-transactions['settle_date'] = transactions['settle_date'].astype(np.object)
-
-transactions['request_date'] = transactions['request_date'].parallel_apply(convert_to_python_datetime)
-transactions['created_date'] = transactions['created_date'].parallel_apply(convert_to_python_datetime)
-transactions['ship_date'] = transactions['ship_date'].parallel_apply(convert_to_python_datetime)
-transactions['settle_date'] = transactions['settle_date'].parallel_apply(convert_to_python_datetime)
-
 field_name_mapping = {
     'Users User ID': 'user_id',
     ' CHATting Stylists Stylist ID': 'stylist_id',
@@ -143,42 +94,22 @@ for key in sorted_vocab_keys:
     sorted_vocab[key] = vocab[key]
 
 
-def remove_urls_(token):
-    # macmia.me
-    # /pricing
-    # app.macandmia.com
-    # .com
-    # /pin.it/bqs46f52mvgal3o4
-    # hire.lever.co
-    # macmia.co/kylebstylist
-
-
-    pass
-
 
 def remove_hapaxes(tokens):
     hapax_dict = {hapax: 1 for hapax in vocab.hapaxes()}
     finalized_tokens = []
     for token in tokens:
-        if token in hapax_dict:
-            continue
-        finalized_tokens.append(token)
+        if vocab.get(token) >= 50000 or vocab.get(token) < 5:
+            tokens.remove(token)
 
 
-def remove_dates(token):
-    # 09/04/2018
-    pass
-
-
-def remove_phone_nums(token):
-    pass
 
 print(f"Total number of tokens: {len(corpus)}")
 print(f"Total number of types: {len(vocab)}")
 print(f"Lexical density: {len(messaging_text)/ len(vocab)}")
 print(vocab.most_common(50))  # most common are the stop words and need to be removed.
 print(vocab.most_common(200))
-print(len(vocab.hapaxes())) # around 30228 out of 67533 tokens just occur once
+print(len(vocab.hapaxes()))  # around 30228 out of 67533 tokens just occur once
 
 
 frequency_num_words_df = pd.DataFrame.from_records(list(vocab.r_Nr().items()), columns=['frequency', 'num_words'])
@@ -349,15 +280,7 @@ plt.show()
 
 bigrams = BigramCollocationFinder.from_words(corpus)
 trigrams = TrigramCollocationFinder.from_words(corpus)
-lemmatizer = WordNetLemmatizer()
 
-
-def lemmatize(word):
-    for pos in POS_LIST:
-        lemmatized_token = lemmatizer.lemmatize(word, pos)
-        if lemmatized_token != word:
-            return lemmatized_token
-    return word
 
 
 phone_nums = {}
