@@ -1,6 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 
+import graphviz
 import pandas as pd
 from matplotlib.axes import Axes
 from pandarallel import pandarallel
@@ -11,6 +12,7 @@ from sklearn.cluster import AgglomerativeClustering
 from sklearn.decomposition import PCA
 from sklearn.metrics import silhouette_score
 from sklearn.neighbors import kneighbors_graph
+from sklearn import tree
 
 from wrangling.utils import convert_to_python_datetime, convert_datetime_cols_to_python_datetime, \
     convert_timedelata_to_days, filter_based_on_ranges
@@ -100,7 +102,7 @@ for n_cluster in range(2,8):
 executor = ThreadPoolExecutor(max_workers=4)
 futures = []
 silhouettes = []
-connectivity = kneighbors_graph(p_comps, n_neighbors=30, include_self=False)
+connectivity = kneighbors_graph(p_comps, n_neighbors=50, include_self=False)
 cl = partial(AgglomerativeClustering, connectivity=connectivity, linkage='ward')
 for n_cluster in range(2,6):
     print(f"Starting with cluster size {n_cluster}")
@@ -130,7 +132,7 @@ axs.plot(range(2,6), silhouettes, 'bo-')
 axs.set_title("Silhouette metric")
 plt.show()
 
-connectivity = kneighbors_graph(p_comps, n_neighbors=30, include_self=False)
+connectivity = kneighbors_graph(p_comps, n_neighbors=50, include_self=False)
 cl_ = cl(n_clusters=5).fit(p_comps)
 plt.figure()
 axs: Axes = plt.gca()
@@ -160,7 +162,19 @@ plt.show()
 # create a decision tree to profile these clusters
 train_data['cl_labels'] = cl_.labels_
 train_data.groupby('cl_labels').order_lag.mean()
+
 filter_based_on_ranges(train_data, 'order_lag', upper_bound=400).boxplot(
     "order_lag", by='cl_labels', vert=False, showmeans=True)
 train_data.boxplot(
     "order_lag", by='cl_labels', vert=False, showmeans=True)
+
+tree_classifier = tree.DecisionTreeClassifier(
+    criterion="entropy", random_state=60616, max_depth=4, class_weight="balanced"
+)
+tree_classifier.fit(X, cl_.labels_)
+dot_data = tree.export_graphviz(
+    tree_classifier, feature_names=X.columns, class_names= ['0','1','2','3','4'], filled=True, rounded=True
+)
+
+graph = graphviz.Source(dot_data)
+graph.render("Cluster profiling")
