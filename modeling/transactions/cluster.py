@@ -2,17 +2,18 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 
 import graphviz
+import numpy as np
 import pandas as pd
+from matplotlib import pyplot as plt
 from matplotlib.axes import Axes
 from pandarallel import pandarallel
 from pandas import DataFrame
-from matplotlib import pyplot as plt
-import numpy as np
-from sklearn.cluster import AgglomerativeClustering
+from sklearn import tree
+from sklearn.cluster import AgglomerativeClustering, KMeans
 from sklearn.decomposition import PCA
 from sklearn.metrics import silhouette_score
+from sklearn.model_selection import train_test_split, cross_val_score
 from sklearn.neighbors import kneighbors_graph
-from sklearn import tree
 
 from wrangling.utils import convert_to_python_datetime, convert_datetime_cols_to_python_datetime, \
     convert_timedelata_to_days, filter_based_on_ranges
@@ -128,7 +129,9 @@ avg_silhouettes_over_neighbors = [0.15450515839588114, 0.13880298045604902, 0.14
                                   0.14184250997247824, 0.12330216541761356, 0.11209507135789999]
 plt.figure()
 axs: Axes = plt.gca()
-axs.plot(range(2,6), silhouettes, 'bo-')
+axs.plot(range(2,6), sil_25_30_and_50, 'bo-')
+axs.set_xlabel("Cluster sizes")
+axs.set_ylabel("Silhouette index")
 axs.set_title("Silhouette metric")
 plt.show()
 
@@ -150,7 +153,7 @@ plt.figure()
 axs: Axes = plt.gca()
 axs.set_xlabel("PC1")
 axs.set_ylabel("PC2")
-
+axs.set_title("Density biplot")
 p_comps_grp = p_comps.groupby(cl_.labels_)
 for key, grp in p_comps_grp:
     axs.scatter(grp[0], grp[1], marker ='.', label=key)
@@ -158,9 +161,10 @@ for key, grp in p_comps_grp:
 axs.legend()
 plt.show()
 
-
+# cl_ = KMeans(n_clusters=5, random_state=60616).fit(p_comps)
 # create a decision tree to profile these clusters
 train_data['cl_labels'] = cl_.labels_
+train_data['cl_labels'].value_counts()
 train_data.groupby('cl_labels').order_lag.mean()
 
 filter_based_on_ranges(train_data, 'order_lag', upper_bound=400).boxplot(
@@ -168,13 +172,89 @@ filter_based_on_ranges(train_data, 'order_lag', upper_bound=400).boxplot(
 train_data.boxplot(
     "order_lag", by='cl_labels', vert=False, showmeans=True)
 
-tree_classifier = tree.DecisionTreeClassifier(
-    criterion="entropy", random_state=60616, max_depth=4, class_weight="balanced"
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X, cl_.labels_, train_size=0.8, test_size=0.2, random_state=60616, stratify=cl_.labels_
 )
-tree_classifier.fit(X, cl_.labels_)
+
+trees = []
+tree_acc_scores_validation = []
+tree_acc_std_errors = []
+tree_classifier = partial(
+    tree.DecisionTreeClassifier, criterion="entropy", random_state=60616, class_weight="balanced"
+)
+
+
+for tree_depth in range(2,25):
+    trees.append(
+        tree_classifier(max_depth=tree_depth)
+    )
+
+for t in trees:
+    scores = cross_val_score(t, X_train, y_train, cv=5)
+    tree_acc_scores_validation.append(scores.mean())
+    tree_acc_std_errors.append(scores.std())
+
+plt.figure()
+axs: Axes = plt.gca()
+axs.plot(range(2, 25), tree_acc_scores_validation, 'bo--')
+axs.set_xlabel("Tree depth")
+axs.set_ylabel("Validation set accuracy")
+axs.set_xticks(list(range(2, 25)))
+axs.set_title("Tree pruning/ Hyperparameter selection")
+plt.show()
+
+
+t = tree_classifier(max_depth=4).fit(X_train, y_train)
+t.score(X_test, y_test)
+t.feature_importances_
+
+
+axs: Axes = train_data.boxplot('order_rank', by='cl_labels')
+axs.set_xlabel("Cluster labels")
+axs.set_title("Boxplot grouped by cluster labels")
+axs.set_ylabel("Order rank")
+
+axs: Axes = train_data[(train_data.request_ship_diff < 50) & (train_data.request_ship_diff > 0)].boxplot('request_ship_diff', by='cl_labels')
+axs.set_xlabel("Cluster labels")
+axs.set_title("Boxplot grouped by cluster labels")
+axs.set_ylabel("Lag b/w request date and ship date")
+
+axs: Axes = train_data.boxplot('kept_count', by='cl_labels')
+axs.set_xlabel("Cluster labels")
+axs.set_title("Boxplot grouped by cluster labels")
+axs.set_ylabel("Kept count")
+
+axs: Axes = train_data.boxplot('keep_rate', by='cl_labels')
+axs.set_xlabel("Cluster labels")
+axs.set_title("Boxplot grouped by cluster labels")
+axs.set_ylabel("Keep rate")
+
+axs: Axes = train_data.boxplot('box_price', by='cl_labels')
+axs.set_xlabel("Cluster labels")
+axs.set_title("Boxplot grouped by cluster labels")
+axs.set_ylabel("Box price")
+
+axs: Axes = train_data.boxplot('num_child', by='cl_labels')
+axs.set_xlabel("Cluster labels")
+axs.set_ylabel("Number of children")
+axs.set_title("Boxplot grouped by cluster labels")
+
+axs: Axes = train_data.boxplot('kept_price', by='cl_labels')
+axs.set_xlabel("Cluster labels")
+axs.set_title("Boxplot grouped by cluster labels")
+axs.set_ylabel("Kept price")
+plt.show()
+
+
+axs: Axes = train_data.boxplot('order_lag', by='cl_labels')
+axs.set_xlabel("Cluster labels")
+axs.set_title("Boxplot grouped by cluster labels")
+axs.set_ylabel("Order lag")
+plt.show()
 dot_data = tree.export_graphviz(
-    tree_classifier, feature_names=X.columns, class_names= ['0','1','2','3','4'], filled=True, rounded=True
+    t, feature_names=X.columns, class_names=['0', '1', '2', '3', '4'], filled=True, rounded=True,
 )
 
 graph = graphviz.Source(dot_data)
-graph.render("Cluster profiling")
+graph.render("Cluster profiling", "visualizations", cleanup=True)
