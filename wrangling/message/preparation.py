@@ -1,27 +1,34 @@
 import re
-import concurrent
 import string
 from pathlib import Path
-from datetime import datetime
 
 import enchant
 import pandas as pd
 from pandarallel import pandarallel
-import numpy as np
 import nltk
-from matplotlib.axes import Axes
-from nltk import word_tokenize, Text, BigramCollocationFinder, TrigramCollocationFinder, FreqDist, RegexpTokenizer
+from nltk import word_tokenize, Text, BigramCollocationFinder, RegexpTokenizer
 from nltk.corpus.reader.wordnet import POS_LIST
 from pandas import DataFrame
-from matplotlib import pyplot as plt
 from nltk import WordNetLemmatizer
+import re
+import string
+from pathlib import Path
 
+import enchant
+import nltk
+import pandas as pd
+from nltk import WordNetLemmatizer
+from nltk import word_tokenize, Text, BigramCollocationFinder, RegexpTokenizer
+from nltk.corpus.reader.wordnet import POS_LIST
+from pandarallel import pandarallel
+from pandas import DataFrame
 
 pandarallel.initialize()
 stopword_dict = {}  # indexing for faster query
 english_us_dict = enchant.Dict("en_US")
 for word in nltk.corpus.stopwords.words('english'):
     stopword_dict[word] = 1
+
 regex_tokenizer = RegexpTokenizer(r'[a-zA-Z]+')
 
 field_name_mapping = {
@@ -43,6 +50,9 @@ msg_data: DataFrame = pd.read_csv(
 msg_data.rename(field_name_mapping, inplace=True, axis=1)
 msg_data = msg_data[~msg_data['user_id'].isna()]  # 663 rows
 msg_data = msg_data[~msg_data['msg'].isna()]  # 201117 rows
+msg_data = msg_data[~msg_data['created_at'].isna()]
+msg_data = msg_data[~msg_data['stylist_id'].isna()]
+msg_data.sender[msg_data.sender == 'unknown'] = 'stylist'  # from data inspection
 punctuations = string.punctuation
 
 
@@ -134,7 +144,7 @@ def strip_and_tokenize(msg):
         except UnicodeEncodeError:
             tokens.remove(token)  # remove non-ascii tokens
             continue
-
+        #
         if is_stop_word(token):  # remove stopwords
             tokens.remove(token)
             continue
@@ -185,9 +195,13 @@ def remove_non_price_numbers(tokens):
 
 def remove_non_english_tokens(tokens):
     tokens_ = tokens.copy()
-    for token in tokens_:
+    tokens_removed = 0
+    for index, token in enumerate(tokens_):
+        if token == "n't":
+            tokens.insert(index - tokens_removed, 'not')
         if not is_english_word(token):
             tokens.remove(token)
+            tokens_removed += 1
     return tokens
 
 
@@ -221,6 +235,8 @@ msg_data['tokenized_msg'] = msg_data['msg'].parallel_apply(strip_and_tokenize)
 msg_data['tokenized_msg'] = msg_data['tokenized_msg'].parallel_apply(remove_non_price_numbers)
 
 corpus = []
+
+
 def construct_msg_corpus(tokenized_msg):
     corpus.extend(tokenized_msg)
 
@@ -234,10 +250,14 @@ def remove_frequent_and_rare_tokens(tokens):
     for token in tokens:
         if vocab.get(token) >= 50000 or vocab.get(token) < 5:
             tokens.remove(token)
+    return tokens
 
 
 msg_data['tokenized_msg'] = msg_data['tokenized_msg'].parallel_apply(remove_frequent_and_rare_tokens)
 msg_data['tokenized_msg'] = msg_data['tokenized_msg'].parallel_apply(remove_non_english_tokens)
 msg_data['tokenized_msg'] = msg_data['tokenized_msg'].parallel_apply(lematize_tokens)
 msg_data['tokenized_msg'] = msg_data['tokenized_msg'].parallel_apply(remove_non_informatic_pos)
-msg_data.to_csv('/Users/saransh/Desktop/practicum/data/Messaging.csv', index=False)
+obs_to_keep = msg_data['tokenized_msg'].apply(lambda tokens: len(tokens) > 0)
+msg_data = msg_data[obs_to_keep]
+msg_data['tokenized_msg'] = msg_data['tokenized_msg'].apply(lambda tokens: " ".join(tokens))
+msg_data.reset_index(drop=True).to_parquet('/Users/saransh/Desktop/practicum/data/Messaging.parquet', index=False)

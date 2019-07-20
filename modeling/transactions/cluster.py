@@ -1,3 +1,4 @@
+import random
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 
@@ -9,11 +10,12 @@ from matplotlib.axes import Axes
 from pandarallel import pandarallel
 from pandas import DataFrame
 from sklearn import tree
-from sklearn.cluster import AgglomerativeClustering, KMeans
+from sklearn.cluster import AgglomerativeClustering
 from sklearn.decomposition import PCA
 from sklearn.metrics import silhouette_score
 from sklearn.model_selection import train_test_split, cross_val_score
 from sklearn.neighbors import kneighbors_graph
+from sklearn.utils import resample
 
 from wrangling.utils import convert_to_python_datetime, convert_datetime_cols_to_python_datetime, \
     convert_timedelata_to_days, filter_based_on_ranges
@@ -21,17 +23,21 @@ from wrangling.utils import convert_to_python_datetime, convert_datetime_cols_to
 pandarallel.initialize()
 train_data = pd.read_csv('/Users/saransh/Desktop/practicum/data/user_order_train.csv')
 
+
+train_data = train_data[~train_data.user_id.isna()]  # orders not corresponding to any user
+train_data = train_data[~train_data.ship_date.isna()]  # orders not shipped
+train_data = train_data[~train_data.stylist_id.isna()]  # no stylists assigned
+
 transactions_type_mapping = dict(
     orders_id=np.int64,
     user_id=np.int64,
+    stylist_id=np.int64,
     items_count=np.int64,
     kept_count=np.int64,
     order_rank=np.int64,
     num_child=np.int64
 )
-train_data = train_data[~train_data.user_id.isna()]  # orders not corresponding to any user
-train_data = train_data[~train_data.ship_date.isna()]  # orders not shipped
-train_data = train_data[~train_data.stylist_id.isna()]  # no stylists assigned
+
 for col, type in transactions_type_mapping.items():
     train_data[col] = train_data[col].astype(type)  # transform dataframe cols to appropriate types
 
@@ -136,7 +142,17 @@ axs.set_title("Silhouette metric")
 plt.show()
 
 connectivity = kneighbors_graph(p_comps, n_neighbors=50, include_self=False)
-cl_ = cl(n_clusters=5).fit(p_comps)
+cl = partial(AgglomerativeClustering, connectivity=connectivity, linkage='ward')
+p_cl_ = cl(n_clusters=5).fit(p_comps)
+random.seed(60616)
+cl_means = pd.DataFrame()  # Storing Bootstrapped clustering results
+for num_samples in range(0, 101):
+    print(f"Starting iter {num_samples}")
+    sampled_data = resample(p_comps, stratify=p_cl_.labels_)  # stratified bootstrap based on initial clustering labels
+    order_lag = train_data.reset_index().order_lag.iloc[sampled_data.index]
+    cl_ = cl(n_clusters=5).fit(sampled_data)
+    cl_means[num_samples] = sorted(order_lag.groupby(cl_.labels_).mean().tolist())
+
 plt.figure()
 axs: Axes = plt.gca()
 axs.set_xlabel("PC1")
@@ -161,9 +177,9 @@ for key, grp in p_comps_grp:
 axs.legend()
 plt.show()
 
-# cl_ = KMeans(n_clusters=5, random_state=60616).fit(p_comps)
+
 # create a decision tree to profile these clusters
-train_data['cl_labels'] = cl_.labels_
+train_data['cl_labels'] = p_cl_.labels_
 train_data['cl_labels'].value_counts()
 train_data.groupby('cl_labels').order_lag.mean()
 
