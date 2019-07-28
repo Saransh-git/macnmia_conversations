@@ -3,33 +3,26 @@ import string
 from pathlib import Path
 
 import enchant
-import pandas as pd
-from pandarallel import pandarallel
 import nltk
+import pandas as pd
+from nltk import WordNetLemmatizer
 from nltk import word_tokenize, Text, BigramCollocationFinder, RegexpTokenizer
 from nltk.corpus.reader.wordnet import POS_LIST
+from pandarallel import pandarallel
 from pandas import DataFrame
-from nltk import WordNetLemmatizer
-import re
-import string
-from pathlib import Path
+from typing import Tuple
+from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+from gensim.corpora.dictionary import Dictionary
 
-import enchant
-import nltk
-import pandas as pd
-from nltk import WordNetLemmatizer
-from nltk import word_tokenize, Text, BigramCollocationFinder, RegexpTokenizer
-from nltk.corpus.reader.wordnet import POS_LIST
-from pandarallel import pandarallel
-from pandas import DataFrame
 
 pandarallel.initialize()
+sentiment_analyzer = SentimentIntensityAnalyzer()
 stopword_dict = {}  # indexing for faster query
 english_us_dict = enchant.Dict("en_US")
 for word in nltk.corpus.stopwords.words('english'):
     stopword_dict[word] = 1
 
-regex_tokenizer = RegexpTokenizer(r'[a-zA-Z]+')
+regex_tokenizer = RegexpTokenizer(r'[0-9a-zA-Z]+')
 
 field_name_mapping = {
     'Users User ID': 'user_id',
@@ -55,8 +48,6 @@ msg_data = msg_data[~msg_data['stylist_id'].isna()]
 msg_data.sender[msg_data.sender == 'unknown'] = 'stylist'  # from data inspection
 punctuations = string.punctuation
 
-
-# msg_data = msg_data[~msg_data['stylist_id'].isna()] TODO: clean it afterwards
 
 date_pattern = r'[0-9]{1,4}([/-])[0-9]{1,2}\1[0-9]{1,4}'
 date_regex = re.compile(date_pattern)
@@ -95,6 +86,25 @@ url_pattern = r'/{0,2}(?:www\.)?' \
               r'(?:\.com|\.me|\.it|\.org|\.net|\.co|\.be|\.gl|\.in))(?:/[^(\s)/]+)*)/?'  # let's use this
 # stupid url pattern
 url_regex = re.compile(url_pattern)
+short_age_pattern = re.compile("\d{1,2}([ty]|mo)")
+
+
+def analyze_sentiment(msg_data):
+    sent_dict = sentiment_analyzer.polarity_scores(msg_data['msg'])
+    msg_data['pos_sent'] = sent_dict['pos']
+    msg_data['neg_sent'] = sent_dict['neg']
+    msg_data['neu_sent'] = sent_dict['neu']
+    msg_data['sent_score'] = sent_dict['compound']
+    return msg_data
+
+
+def polarize_sentiments(sentiment_score: float):
+    if sentiment_score >= 0.05:
+        return 'pos'
+    elif sentiment_score <= -0.05:
+        return 'neg'
+    else:
+        return 'neu'
 
 
 def is_url(token: str):
@@ -108,14 +118,16 @@ def is_url(token: str):
     return url_regex.fullmatch(token)
 
 
-def is_remove_url(token: str) -> bool:
-    urls_to_keep = ['/add-billing']
+def retrieve_url_tokens(token: str) -> str:
+    urls_to_keep = {
+        '/add-billing': '<BILL_URL>'
+    }
     if is_url(token):
         for u in urls_to_keep:
             if u in token:
-                return False
-            return True
-    return False
+                return urls_to_keep[u]
+        return "<URL>"
+    return token
 
 
 def is_stop_word(token: str) -> bool:
@@ -127,6 +139,15 @@ def is_stop_word(token: str) -> bool:
         return True
 
 
+def remove_stop_words(tokens):
+    finalized_tokens = []
+    for token in tokens:
+        if is_stop_word(token):
+            continue
+        else:
+            finalized_tokens.append(token)
+
+
 def is_english_word(token: str) -> bool:
     return english_us_dict.check(token)
 
@@ -134,75 +155,122 @@ def is_english_word(token: str) -> bool:
 def strip_and_tokenize(msg):
     msg = msg.strip()
     msg = msg.lower()
+    msg = re.sub(b'\xe2\x80\x99'.decode(), "'", msg)
     # remove stop words
     # remove non-ascii characters
     tokens = word_tokenize(msg)
-    tokens_ = tokens.copy()
-    for token in tokens_:
+    # tokens_ = tokens.copy()
+    ret_tokens = []
+    token_bigrams = BigramCollocationFinder.from_words(tokens)
+    for token in tokens:
         try:
             token.encode("ascii")
         except UnicodeEncodeError:
-            tokens.remove(token)  # remove non-ascii tokens
+            # tokens.remove(token)  # remove non-ascii tokens
             continue
         #
-        if is_stop_word(token):  # remove stopwords
-            tokens.remove(token)
-            continue
         if token in punctuations:  # remove punctuations
-            tokens.remove(token)
+            # tokens.remove(token)
             continue
-        if len(token) <= 2:  # drop the words below length of 2
-            tokens.remove(token)
+        #
+        if is_date(token):
+            ret_tokens.append("<DATE>")
             continue
-        if is_date(token) or is_phone_number(token):
-            tokens.remove(token)
+        if is_phone_number(token):
+            # tokens.remove(token)
+            ret_tokens.append("<PHONE>")
             continue
-        remove_url = is_remove_url(token)
-        if remove_url:
-            tokens.remove(token)
+        #
+        if bool(is_url(token)):
+            ret_tokens.append(retrieve_url_tokens(token))
             continue
-        if len(token) >= 30:  # drop the words above length of 30, retain to be kept urls
-            if bool(is_url(token)):
-                continue
-            else:
-                tokens.remove(token)
-                continue
-        elif 20 <= len(token) < 30:
-            if bool(is_url(token)):
-                continue
-            else:
-                tokens.extend(regex_tokenizer.tokenize(token))
-    return tokens
+        new_token, is_resolved = resolve_clitics(token)
+        if is_resolved:
+            ret_tokens.append(new_token)
+            continue
+        p_token, is_tokenized = tokenize_price_numbers(token, token_bigrams)
+        if is_tokenized:
+            ret_tokens.append(p_token)
+            continue
+        ret_tokens.extend(regex_tokenizer.tokenize(token))
+        #
+    return ret_tokens
 
 
-def remove_non_price_numbers(tokens):
+def tokenize_price_numbers(token, token_bigrams):
     """
     Remove numbers which are not prices
     """
     finalized_tokens = []
-    token_bigrams = BigramCollocationFinder.from_words(tokens)
     num_pattern = r"\d+(?:\.\d+)?"
     pattern = re.compile(f"{num_pattern}(-{num_pattern})?")  # include tokens like ranges of numbers/ numbers
+    if not pattern.fullmatch(token):
+        return token, False
+    if (token_bigrams.ngram_fd.get(('$', token)) or token_bigrams.ngram_fd.get((token, '$'))) \
+            or (token_bigrams.ngram_fd.get(('usd', token)) or token_bigrams.ngram_fd.get((token, 'usd'))):
+        return "<PRICE>", True
+    else:
+        return token, False
+
+
+def tokenize_age_tokens(tokens) -> bool:
+    age_pattern = re.compile(r"\d{1,2}")
+    finalized_tokens = []
+    token_bigrams = BigramCollocationFinder.from_words(tokens)
     for token in tokens:
-        if not pattern.fullmatch(token):
+        if short_age_pattern.fullmatch(token):
+            finalized_tokens.append("<AGE>")
+            continue
+        if not age_pattern.fullmatch(token):
             finalized_tokens.append(token)
             continue
-        if (token_bigrams.ngram_fd.get(('$', token)) or token_bigrams.ngram_fd.get((token, '$'))) \
-                or (token_bigrams.ngram_fd.get(('usd', token)) or token_bigrams.ngram_fd.get((token, 'usd'))):
+        if token_bigrams.ngram_fd.get((token, 'year')) or token_bigrams.ngram_fd.get((token, 'years')):
+            finalized_tokens.append("<AGE>")
+            continue
+        elif token_bigrams.ngram_fd.get((token, 'month')) or token_bigrams.ngram_fd.get((token, 'months')):
+            finalized_tokens.append("<AGE>")
+            continue
+        else:
             finalized_tokens.append(token)
     return finalized_tokens
 
 
+def tokenize_numbers(tokens):
+    finalized_tokens = []
+    number_pattern = re.compile(r"\d+")
+    for token in tokens:
+        if number_pattern.fullmatch(token):
+            finalized_tokens.append("<NUM>")
+        else:
+            finalized_tokens.append(token)
+    return finalized_tokens
+
+
+def resolve_clitics(token) -> Tuple[str, bool]:
+    clitic_map = {
+        "n't": "not",
+        "'d": "would",
+        "'s": "is",
+        "'re": "are",
+        "'m": "am"
+    }
+    if token in clitic_map:
+        return clitic_map[token], True
+    return token, False
+
+
 def remove_non_english_tokens(tokens):
-    tokens_ = tokens.copy()
-    tokens_removed = 0
-    for index, token in enumerate(tokens_):
-        if token == "n't":
-            tokens.insert(index - tokens_removed, 'not')
+    finalized_tokens = []
+    for token in tokens:
+        if token in ["<AGE>", "<PRICE>", "<NUM>", "<URL>", "<DATE>", "<PHONE>", "<BILL_URL>"]:
+            finalized_tokens.append(token)
+            continue
         if not is_english_word(token):
-            tokens.remove(token)
-            tokens_removed += 1
-    return tokens
+            finalized_tokens.append("<UNK>")
+            continue
+        finalized_tokens.append(token)
+    #
+    return finalized_tokens
 
 
 lemmatizer = WordNetLemmatizer()
@@ -231,8 +299,12 @@ def remove_non_informatic_pos(tokens):
     return tokens
 
 
+msg_data = msg_data.parallel_apply(analyze_sentiment, axis=1)
+msg_data['sentiments'] = msg_data['sent_score'].parallel_apply(polarize_sentiments)
 msg_data['tokenized_msg'] = msg_data['msg'].parallel_apply(strip_and_tokenize)
-msg_data['tokenized_msg'] = msg_data['tokenized_msg'].parallel_apply(remove_non_price_numbers)
+msg_data['tokenized_msg'] = msg_data['tokenized_msg'].parallel_apply(tokenize_age_tokens)
+msg_data['tokenized_msg'] = msg_data['tokenized_msg'].parallel_apply(tokenize_numbers)
+
 
 corpus = []
 
@@ -253,11 +325,32 @@ def remove_frequent_and_rare_tokens(tokens):
     return tokens
 
 
-msg_data['tokenized_msg'] = msg_data['tokenized_msg'].parallel_apply(remove_frequent_and_rare_tokens)
 msg_data['tokenized_msg'] = msg_data['tokenized_msg'].parallel_apply(remove_non_english_tokens)
-msg_data['tokenized_msg'] = msg_data['tokenized_msg'].parallel_apply(lematize_tokens)
-msg_data['tokenized_msg'] = msg_data['tokenized_msg'].parallel_apply(remove_non_informatic_pos)
-obs_to_keep = msg_data['tokenized_msg'].apply(lambda tokens: len(tokens) > 0)
-msg_data = msg_data[obs_to_keep]
 msg_data['tokenized_msg'] = msg_data['tokenized_msg'].apply(lambda tokens: " ".join(tokens))
+msg_data['processed_msg'] = msg_data['tokenized_msg'].apply(lambda msg: msg.split())  # This one for topic modeling
+# msg_data['processed_msg'] = msg_data['processed_msg'].parallel_apply(lematize_tokens)
+dict_corpus = Dictionary(msg_data['processed_msg'].tolist())
+dict_corpus.filter_extremes(no_above=0.7)
+
+
+def reconstruct_processed_msgs_from_corpora(msg_tokens):
+    finalized_tokens = []
+    ret_val = dict_corpus.doc2idx(msg_tokens)
+    for token_id in ret_val:
+        try:
+            finalized_tokens.append(
+                dict_corpus[token_id]
+            )
+        except KeyError:
+            continue
+    #
+    return finalized_tokens
+
+
+msg_data['processed_msg'] = msg_data['processed_msg'].parallel_apply(reconstruct_processed_msgs_from_corpora)
+# msg_data['tokenized_msg'] = msg_data['tokenized_msg'].parallel_apply(remove_frequent_and_rare_tokens)
+# msg_data['tokenized_msg'] = msg_data['tokenized_msg'].parallel_apply(remove_non_informatic_pos)
+# obs_to_keep = msg_data['tokenized_msg'].apply(lambda tokens: len(tokens) > 0)
+# msg_data = msg_data[obs_to_keep]
+msg_data['processed_msg'] = msg_data['processed_msg'].apply(lambda tokens: " ".join(tokens))
 msg_data.reset_index(drop=True).to_parquet('/Users/saransh/Desktop/practicum/data/Messaging.parquet', index=False)
