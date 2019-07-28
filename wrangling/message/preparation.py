@@ -353,4 +353,5 @@ msg_data['processed_msg'] = msg_data['processed_msg'].parallel_apply(reconstruct
 # obs_to_keep = msg_data['tokenized_msg'].apply(lambda tokens: len(tokens) > 0)
 # msg_data = msg_data[obs_to_keep]
 msg_data['processed_msg'] = msg_data['processed_msg'].apply(lambda tokens: " ".join(tokens))
+msg_data.index = range(msg_data.shape[0])
 msg_data.reset_index(drop=True).to_parquet('/Users/saransh/Desktop/practicum/data/Messaging.parquet', index=False)
