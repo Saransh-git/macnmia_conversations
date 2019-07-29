@@ -274,3 +274,5 @@ dot_data = tree.export_graphviz(
 
 graph = graphviz.Source(dot_data)
 graph.render("Cluster profiling", "visualizations", cleanup=True)
+
+train_data.to_csv('/Users/saransh/Desktop/practicum/data/order_clustered.csv', index=False)
